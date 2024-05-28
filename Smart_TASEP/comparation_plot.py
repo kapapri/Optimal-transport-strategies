@@ -1,12 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-runs = 10
-newLx = 50
-newLy = 20
+runs = 1
+newLx = 12
+newLy = 12
 Nt = 1000
-current = np.loadtxt('results/1-0.5_particles/Posttraining/2d_TASEP_current_50x20_runs10.txt')  # This assumes data is separated by whitespace
-random_current = np.loadtxt('results/1-0.5_particles/Posttraining/Random2d_TASEP_current_50x20_runs10.txt')  # This assumes data is separated by whitespace
+current = np.loadtxt('/home/a/A.Rivera/Code_Projects/1_Thesis_Code/Current_TASEP/results_new_input_NN 0.8-1/3. reward boundary lane/12x12/2d_TASEP_current_12x12_runs1.txt') 
+random_current = np.loadtxt('/home/a/A.Rivera/Code_Projects/1_Thesis_Code/Current_TASEP/results_new_input_NN 0.8-1/3. reward boundary lane/12x12/Random2d_TASEP_current_12x12_runs1.txt')  
 episode_duration = np.arange(Nt)
 plt.figure(figsize=(10, 6))  # Set the figure size (optional)
 
@@ -20,7 +20,7 @@ plt.xlabel('Episode duration')
 plt.ylabel(f'Average current over {runs} runs')
 plt.title(f'Current comparation for {newLx}x{newLy} system')
 plt.legend() 
-plt.ylim([0, 0.5])    
+plt.ylim([0, 0.7])    
 
 # # Show the plot
 # plt.show()

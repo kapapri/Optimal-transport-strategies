@@ -320,6 +320,8 @@ def do_training(num_episodes, L, density, Nt, log = False):
         # print("Training episode ", i_episode, " is over. Current = ", total_current, "; Selected empty sites / L*L = ", selected_empty_site / (Nt*L*L))
         rewards.append(score) 
         current.append(total_current)
+        empty_sites.append(selected_empty_site/ (Nt*L*L))
+        
         plot_score() # here if you want to see the training
                      # only with interactive python
 
@@ -328,7 +330,8 @@ def do_training(num_episodes, L, density, Nt, log = False):
     # plt.ioff()
     plt.show() # uncomment to see training
     plt.savefig("./Training_Reward.png", format="png", dpi=600) # only withOUT interactive python
-
+    plot_empty_sites()
+    plt.savefig(f"./Empty_Sites_Chosen{L}x{L}.png", format="png", dpi=600) # only withOUT interactive python
 # plots
 def plot_score(show_result=False):
     plt.figure(1)
@@ -358,6 +361,12 @@ def plot_current():
     plt.ylim([0, 0.8])    
     plt.plot(current)
 
+def plot_empty_sites():
+    plt.figure(4)
+    plt.xlabel('Episode duration')
+    plt.ylabel('Number of empty sites chosen over L x L')
+    plt.plot(empty_sites)
+    
 # Animation
 def create_animation(Frames_movie):
     fig, ax = plt.subplots()
@@ -386,8 +395,8 @@ def create_animation(Frames_movie):
 
 # Main
 if __name__ == '__main__': 
-    Jessie_we_need_to_train_NN = False
-    Post_training =  True
+    Jessie_we_need_to_train_NN = True
+    Post_training =  False
     log = False
     ############# Model parameters for Machine Learning #############
     num_episodes = 200      # number of training episodes
@@ -417,6 +426,7 @@ if __name__ == '__main__':
         memory = ReplayMemory(100*Nt) # the overall memory batch size 
         rewards = []
         current = []
+        empty_sites = []
         steps_done = 0
         
         do_training(num_episodes, L, density, Nt, log) 
@@ -473,7 +483,7 @@ if __name__ == '__main__':
                     lattice_site = action.item() # a number, and we encode it as x*L + y
                     patchX = int(lattice_site / L)
                     patchY = int(lattice_site % L)
-                    selectedX, selectedY =  (patchX, patchY, Xcenter, Ycenter, L, newLx, newLy)
+                    selectedX, selectedY = get_coordinates_from_patch(patchX, patchY, Xcenter, Ycenter, L, newLx, newLy)
                     # print('lattice_site', lattice_site)
 
                     # to check how does the simulation perform for the random "stupid" simulation, 

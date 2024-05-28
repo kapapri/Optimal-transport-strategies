@@ -1,3 +1,5 @@
+
+
 import numpy as np
 import pickle
 import matplotlib.pyplot as plt
@@ -42,15 +44,14 @@ def create_animation(Frames_movie):
     
 if __name__ == '__main__':
 
-    runs = 1
-    newLx = 50
-    newLy = 20
-    Nt = 500
+    newLx = 12
+    newLy = 12
+    Nt = 1000
 
     with open(f"./movie_storage.pkl", 'rb') as file:
         movie_storage = pickle.load(file)
     print('Action! (recording movie)')
     ani = create_animation(movie_storage[:Nt]) #last run
     HTML(ani.to_jshtml()) # interactive python
-    ani.save("./Movie"+".mp4", fps = 20)
+    ani.save("./Movie"+".gif", fps = 8)
     print('Cut! (movie ready)')    
