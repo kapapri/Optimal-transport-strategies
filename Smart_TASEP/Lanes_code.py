@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import random
+from numpy import random as Random
 import torch 
 import torch.nn as nn
 import torch.optim as optim
@@ -11,7 +12,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from IPython.display import HTML
-from tqdm import tqdm # for the interactive mode this can be annoying
+from tqdm import tqdm
 import pickle
 
 is_ipython = 'inline' in matplotlib.get_backend()
@@ -48,8 +49,8 @@ class DQN(nn.Module):
         return self.layer2(x)
 
 def get_state_system(system, Lx, Ly, Xcenter, Ycenter, L):
- # creates the input for the NN from the system (Lx x Ly): the state consists on two channels (fast and slow particles) 
- # that are two patches taken from the system with (L x L) dimensions and centered at (Xcenter, Ycenter),
+ # creates the input for the NN from the system (Lx x Ly)
+ # the state consists on two channels: two patches (fast and slow particles) taken from the system with dimensions (L x L) and centered at (Xcenter, Ycenter),
  # and a number that indicates the distance of the patch to the center in the y-axis.
     
     # defining the training patch
@@ -61,55 +62,52 @@ def get_state_system(system, Lx, Ly, Xcenter, Ycenter, L):
     y_offset = Ycenter - int(L / 2)
     for i in range(L):
         x_index = x_offset + i
-        if x_index > Lx-1:
-            x_index += -Lx
-        elif x_index < 0:
-            x_index += Lx
-
+        x_index = x_index % Lx # periodic boundaries
+        
         for j in range(L):
             y_index = y_offset + j
-            if y_index > Ly-1:
-                y_index += -Ly
-            elif y_index < 0:
-                y_index += Ly
+            y_index = y_index % Ly # periodic boundaries
 
             value = system[x_index][y_index]
             if value == 1:
                 fast_channel[i][j] = 1
             elif value != 0:
                 slow_channel[i][j] = 1
-           
-    patch = np.concatenate((fast_channel, slow_channel)).flatten()
-
-    distance_center = (Ycenter - int(Ly / 2))/int(Ly / 2) # normalized
+                
+    patch = np.concatenate((fast_channel, slow_channel), axis= None)
+    distance_center = abs(Ycenter - int(Ly / 2))/int(Ly / 2) # normalized
     state = np.append(patch, distance_center)
 
     return state
 
 def get_coordinates_from_patch(x, y, Xcenter, Ycenter, L, Lx, Ly):
- # translates the lattice site from the patch (x, y) to the system reference (x_sys, y_sys).
- # The training patch is centered around (Xcenter, Ycenter), and has (L x L) dimensions, and the system has (Lx x Ly) dimensions
-
-    # calculate the index offsets of the lattice site from the center of the patch
-    x_offset = x - int(L / 2)
-    y_offset = y - int(L / 2)
+ # translates the lattice site (x, y) from the patch to the system reference (x_sys, y_sys)
+ # the training patch is centered around (Xcenter, Ycenter) with (L x L) dimensions, 
+ # and the system has (Lx x Ly) dimensions
     
-    # calculate the corresponding coordinates in the system
-    x_sys = Xcenter + x_offset
-    y_sys = Ycenter + y_offset
+    # translate the coordinates to be relative to the center of the patch
+    relative_x = x - int(L/ 2)
+    relative_y = y - int(L/ 2)
+    
+    # translate to system reference
+    x_sys = Xcenter + relative_x
+    y_sys = Ycenter + relative_y
     
     # periodic boundary conditions
-    if x_sys > Lx-1:
-        x_sys += -Lx
-    elif x_sys < 0:
-        x_sys += Lx
+    x_sys = x_sys % Lx
+    y_sys = y_sys % Ly
 
-    if y_sys > Ly-1:
-        y_sys += -Ly
-    elif y_sys < 0:
-        y_sys += Ly
-    
     return x_sys, y_sys    
+
+
+def is_patch_crossing_boundary(Y_boundary, Ycenter, L, Ly):
+    half_L = int(L / 2)
+    distance = abs(Y_boundary - Ycenter)
+
+    if min(distance, Ly - distance) <= half_L:
+        return True
+    else:
+        return False
 
 def select_action_training(state): 
     global steps_done # count total number of steps to go from almost random exploration to more efficient actions
@@ -166,27 +164,14 @@ def step(lattice, X, Y, L, Xcenter, Ycenter, boundary_lane, log = False):
     current_along = 0
     reward = 1 # simply for choosing a particle and not an empty space
     speed = lattice[X][Y]
-    jump_dice = random.random() # float number between 0 and 1
+    jump_dice = random.random()
     if jump_dice <= speed:
-        if lattice[newX][newY] == 0: # free next site
+        if lattice[newX][newY] == 0: # next site free
             lattice[X][Y] = 0
-            lattice[newX][newY] = speed
-            if log == True:
-                print("  jump done")        
+            lattice[newX][newY] = speed     
             if newX != X: # we have jump forward
                 current_along = 1
                 reward += 1
-                if log == True:
-                    print("  moved forward")
-
-            elif newY == nextY:
-                if log == True:
-                    print("  moved up")
-
-            elif newY == prevY:
-                if log == True:
-                    print("  moved down")
-                       
         else:          
             if log == True:
                 print("  obstacle: it couldn't jump :(")                         
@@ -194,7 +179,7 @@ def step(lattice, X, Y, L, Xcenter, Ycenter, boundary_lane, log = False):
         if log == True:
             print("  no speed: it couldn't jump :(")
 
- # surroundings reward (before movement)
+ # surroundings reward (before jump)
     if lattice[nextX][Y] == 0:
         forward_particle = 0
     else:
@@ -202,8 +187,8 @@ def step(lattice, X, Y, L, Xcenter, Ycenter, boundary_lane, log = False):
 
     reward += int(- 1*(2*forward_particle - 1))   
 
- # lanes rewards (before movement)
-    # define patch_columns based on Xcenter position
+ # lanes rewards (before jump)
+    # extracts a vector with the columns of the patch
     half_patch = int(L/2)
     start_idx = (Xcenter - half_patch) % Lx
     end_idx = (Xcenter + half_patch + 1) % Lx
@@ -212,45 +197,42 @@ def step(lattice, X, Y, L, Xcenter, Ycenter, boundary_lane, log = False):
     else:
         patch_columns = np.concatenate((lattice[start_idx:Lx, :], lattice[0:end_idx, :]), axis=0)
 
-   # fast particle
-    if speed == 1:
-        if Ycenter > 2 and Ycenter < 8: # if it crosses the boundary lane...      10x10
-            patch_boundary = patch_columns[:,boundary_lane]
-            if Y == boundary_lane:
-                reward += 5
-            elif Y > boundary_lane and np.any(patch_boundary == speed): # slow region
-                reward += -1
-            elif Y < boundary_lane and np.any(patch_boundary == speed): # fast region
-                reward += -6
+    for boundary in [boundary_lane, (boundary_lane-1), 0, (Ly-1)]:
+        if is_patch_crossing_boundary(boundary, Ycenter, L, Ly):
+            particles_boundary = patch_columns[:, boundary]
+            if speed == 1:
+                if boundary == boundary_lane or boundary == (Ly-1):
+                    if Y == boundary:
+                        reward += 5
+                    elif Y > boundary_lane and np.any(particles_boundary == speed): # slow region
+                        reward += -1
+                    elif Y < boundary_lane and np.any(particles_boundary == speed): # fast region
+                        reward += -5
 
-        elif Ycenter > 6 or Ycenter < 2: # if it crosses the (Ly-1) lane...      10x10
-            patch_end = patch_columns[:,(Ly-1)]
-            if Y == (Ly-1):
-                reward += 5
-            elif Y >= boundary_lane and np.any(patch_end == speed): # slow region
-                reward += -1
-            elif Y < boundary_lane and np.any(patch_end == speed): # fast region
-                reward += -6
-                
-    # slow particle
-    else:
-        if Ycenter > 1 and Ycenter < 7: # if it crosses the (boundary lane-1)... 10x10
-            patch_prior_boundary = patch_columns[:,(boundary_lane-1)]
-            if Y == 4:
-                reward += 5
-            elif Y < boundary_lane and np.any(patch_prior_boundary == speed): # fast region
-                reward += -1
-            elif Y >= boundary_lane and np.any(patch_prior_boundary == speed): # slow region
-                reward += -6
+                elif boundary == 0 or boundary == (boundary_lane-1):
+                    if Y == boundary:
+                        reward += 0                                   
+                    elif Y >= boundary_lane and np.any(particles_boundary == speed): # slow region
+                        reward += -1
+                    elif Y < boundary_lane and np.any(particles_boundary == speed): # fast region
+                        reward += -5
 
-        elif Ycenter > 7 or Ycenter < 3: # if it crosses the 0 lane... 10x10
-            patch_beginning = patch_columns[:,0]            
-            if Y == 0:
-                reward += 5
-            elif Y < boundary_lane and np.any(patch_beginning == speed): # fast region
-                reward += -1
-            elif Y >= boundary_lane and np.any(patch_beginning == speed): # slow region
-                reward += -6
+            elif speed == 0.8:
+                if boundary == (boundary_lane-1) or boundary == 0:
+                    if Y == boundary:
+                        reward += 5                                
+                    elif Y < boundary_lane and np.any(particles_boundary == speed): # fast region
+                        reward += -1
+                    elif Y >= boundary_lane and np.any(particles_boundary == speed): # slow region
+                        reward += -5
+
+                elif boundary == boundary_lane or boundary == (Ly-1):
+                    if Y == boundary:
+                        reward += 0                                    
+                    elif Y > boundary_lane and np.any(particles_boundary == speed): # slow region
+                        reward += -1
+                    elif Y < boundary_lane and np.any(particles_boundary == speed): # fast region
+                        reward += -5                      
 
     next_state = get_state_system(lattice, Lx, Ly, Xcenter, Ycenter, L)
 
@@ -302,7 +284,7 @@ def do_training(num_episodes, L, density, Nt, Lx, Ly, boundary_lane, log = False
             X = random.randint(0, Lx-1)
             Y = random.randint(0, Ly-1)
             if lattice[X][Y] == 0:
-                lattice[X][Y] = random.choice([0.8, 1])
+                lattice[X][Y] = Random.choice([0.8, 1], p =[0,1])
                 n += 1
 
         # main update loop; I use Monte Carlo random sequential updates here
@@ -317,10 +299,21 @@ def do_training(num_episodes, L, density, Nt, Lx, Ly, boundary_lane, log = False
             for i in range(Lx*Ly):
                 total_fast, fast_up  = 0, 0
                 total_slow, slow_down = 0, 0
-
+                before_fast, after_fast = 0, 0
+                before_slow, after_slow = 0, 0
                 # random sampling in the lattice to apply the training
                 Xcenter = random.randint(0, Lx-1)
                 Ycenter = random.randint(0, Ly-1)
+
+                # counting particles in the patch before jumping
+                for i in range(L):
+                    for j in range(L):
+                        X_sys, Y_sys = get_coordinates_from_patch(i, j, Xcenter, Ycenter, L, Lx, Ly)
+                        if lattice[X_sys][Y_sys] == 1 and Y_sys < boundary_lane:
+                            before_fast += 1
+                        elif lattice[X_sys][Y_sys] != 0 and Y_sys >= boundary_lane:
+                            before_slow += 1                
+
                 state = get_state_system(lattice, Lx, Ly, Xcenter, Ycenter, L)
                 state = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
 
@@ -343,11 +336,21 @@ def do_training(num_episodes, L, density, Nt, Lx, Ly, boundary_lane, log = False
                     next_state = torch.tensor(next_state, dtype=torch.float32, device=device).unsqueeze(0) 
                     memory.push(state, action, next_state, reward)
                     
+                    
                 else: # empty site chosen
-                    reward = -5  
+                    reward = -10
                     selected_empty_site += 1
                     reward = torch.tensor([reward], device=device)  
                     memory.push(state, action, state, reward)
+
+                # counting particles in the patch after jumping
+                for i in range(L):
+                    for j in range(L):
+                        X_sys, Y_sys = get_coordinates_from_patch(i, j, Xcenter, Ycenter, L, Lx, Ly)
+                        if lattice[X_sys][Y_sys] == 1 and Y_sys < boundary_lane:
+                            after_fast += 1
+                        elif lattice[X_sys][Y_sys] != 0 and Y_sys >= boundary_lane:
+                            after_slow += 1   
 
                 score += reward
 
@@ -358,7 +361,7 @@ def do_training(num_episodes, L, density, Nt, Lx, Ly, boundary_lane, log = False
                             total_fast += 1
                             if j < boundary_lane:
                                 fast_up += 1
-                        elif lattice[i][j] == 0.8: 
+                        elif lattice[i][j] != 0: 
                             total_slow += 1
                             if j >= boundary_lane:
                                 slow_down += 1
@@ -440,10 +443,10 @@ def plot_YcurrentII(YcurrentII_fast, YcurrentII_slow):
     plt.figure(3)
     plt.xlabel('Y index')
     plt.ylabel('Average parallel current over runs')
-    plt.axvspan(0, (boundary_lane), facecolor='lightblue', alpha=0.5, label='Fast region')
-    plt.axvspan((boundary_lane), (Ly-1), facecolor='lightgreen', alpha=0.5, label='Slow region')       
-    plt.plot(YcurrentII_fast, label = 'fast particles')
-    plt.plot(YcurrentII_slow, label = 'slow particles')
+    plt.axvspan(0, (boundary_lane - 0.5), facecolor='lightblue', alpha=0.5, label='Fast region')
+    plt.axvspan((boundary_lane - 0.5), (Ly-1), facecolor='lightgreen', alpha=0.5, label='Slow region')      
+    plt.plot(YcurrentII_fast,'-o', label = 'fast particles')
+    plt.plot(YcurrentII_slow,'-o', label = 'slow particles')
     plt.legend()
 
 def plot_YcurrentT(YcurrentT_fast, YcurrentT_slow):
@@ -451,11 +454,11 @@ def plot_YcurrentT(YcurrentT_fast, YcurrentT_slow):
     plt.figure(4)
     plt.xlabel('Y index')
     plt.ylabel('Average perpendicular current over runs') 
-    plt.axvspan(0, (boundary_lane), facecolor='lightblue', alpha=0.5, label='Fast region')
-    plt.axvspan((boundary_lane), (Ly-1), facecolor='lightgreen', alpha=0.5, label='Slow region')      
+    plt.axvspan(0, (boundary_lane - 0.5), facecolor='lightblue', alpha=0.5, label='Fast region')
+    plt.axvspan((boundary_lane - 0.5), (Ly-1), facecolor='lightgreen', alpha=0.5, label='Slow region')      
     plt.axhline(y=0, color='black', linestyle='--')
-    plt.plot(YcurrentT_fast, label = 'fast particles')
-    plt.plot(YcurrentT_slow, label = 'slow particles')
+    plt.plot(YcurrentT_fast, '-o' ,label = 'fast particles')
+    plt.plot(YcurrentT_slow, '-o', label = 'slow particles')
     plt.legend()
 
 def plot_empty_sites(empty_sites, post = False):
@@ -508,7 +511,7 @@ if __name__ == '__main__':
     log = False
     log_post = False
     ############# Model parameters for Machine Learning #############
-    num_episodes = 100      # number of training episodes
+    num_episodes = 100       # number of training episodes
     BATCH_SIZE = 100        # the number of transitions sampled from the replay buffer
     GAMMA = 0.99            # the discounting factor
     EPS_START = 0.9         # EPS_START is the starting value of epsilon; determines how random our action choises are at the beginning
@@ -522,7 +525,7 @@ if __name__ == '__main__':
     Lx = 10
     Ly = 10
     N = int(Lx*Ly*density)
-    boundary_lane = int(Ly/2)
+    boundary_lane = int(Ly/2)  # the regions are: fast [0, (boundary_lane-1)] and slow [boundary lane, (Ly-1)]
     Nt = 100                   # episode duration
     n_observations = 2*L*L + 1 # three channels. Two of the patch size: fast and slow particles and one with the distance to the center
     n_actions = L*L            # patch size, in principle, the empty spots can also be selected
@@ -556,18 +559,15 @@ if __name__ == '__main__':
         trained_net = DQN(n_observations, hidden_size, n_actions).to(device)
         trained_net.load_state_dict(torch.load(PATH))
 
-        one_run_current = []
-
         current = np.zeros(Nt)
         empty_sites = np.zeros(Nt)
-        fast_chosen = np.zeros(Nt)
+        fast_chosen = np.zeros(Nt)    
         slow_chosen = np.zeros(Nt)
-        fast_sites = np.zeros(Nt)
+        fast_sites = np.zeros(Nt)      # fast particles in the right region
         slow_sites = np.zeros(Nt)
-
-        YcurrentII_fast = np.zeros(Ly)
-        YcurrentII_slow = np.zeros(Ly)
-        YcurrentT_fast = np.zeros(Ly)
+        YcurrentII_fast = np.zeros(Ly) # parallel current for fast particles
+        YcurrentII_slow = np.zeros(Ly) 
+        YcurrentT_fast = np.zeros(Ly)  # perpendicular current for fast particles
         YcurrentT_slow = np.zeros(Ly)
 
         for run in tqdm(range(runs)):
@@ -579,7 +579,7 @@ if __name__ == '__main__':
                 X = random.randint(0, Lx-1)
                 Y = random.randint(0, Ly-1)
                 if lattice[X][Y] == 0:
-                    lattice[X][Y] = random.choice([0.8, 1])
+                    lattice[X][Y] = Random.choice([0.8, 1], p =[0,1])
                     n += 1
 
             for t in tqdm(range(Nt)):
@@ -590,7 +590,7 @@ if __name__ == '__main__':
                 right_fast = 0
                 right_slow = 0
 
-                for i in range(Lx*Ly):
+                for move_attempt in range(Lx*Ly):
                     total_fast, fast_up  = 0, 0
                     total_slow, slow_down = 0, 0
 
@@ -643,7 +643,7 @@ if __name__ == '__main__':
                                 lattice[selectedX][selectedY] = 0
                                 lattice[newX][newY] = speed
                                 if newX != selectedX: # we have jump forward
-                                    total_current += 1.0/(Lx*Ly*runs)
+                                    total_current += 1/(Lx*Ly*runs)
                                     if speed == 1:
                                         YcurrentII_fast[selectedY] += 1/(Lx*Ly*Nt*runs)
                                     else:
@@ -653,26 +653,23 @@ if __name__ == '__main__':
                                     if log == True:
                                         print("  moved up")
                                     if speed == 1:
-                                        YcurrentT_fast[selectedY] += 1/(Lx*Ly*Nt*runs)
+                                        YcurrentT_fast[selectedY] += -1/(Lx*Ly*Nt*runs)
                                     else:
-                                        YcurrentT_slow[selectedY] += 1/(Lx*Ly*Nt*runs)
+                                        YcurrentT_slow[selectedY] += -1/(Lx*Ly*Nt*runs)
 
                                 elif newY == prevY:
                                     if log == True:
                                         print("  moved down")
                                     if speed == 1:
-                                        YcurrentT_fast[selectedY] += -1/(Lx*Ly*Nt*runs)
+                                        YcurrentT_fast[selectedY] += 1/(Lx*Ly*Nt*runs)
                                     else:
-                                        YcurrentT_slow[selectedY] += -1/(Lx*Ly*Nt*runs)
+                                        YcurrentT_slow[selectedY] += 1/(Lx*Ly*Nt*runs)
                                                                   
                     else:
-                        if log_post == True:
+                        if log == True:
                             print("ALARM! ALARM!")                            
                             print("empty site chosen")
                         selected_empty_site += 1/(Lx*Ly*runs)
-
-                    if log_post == True:
-                        print('- later lattice \n', lattice)
 
                     # counting particles in their respective areas    
                     for i in range(Lx):
@@ -681,7 +678,7 @@ if __name__ == '__main__':
                                 total_fast += 1
                                 if j < boundary_lane:
                                     fast_up += 1
-                            elif lattice[i][j] == 0.8:
+                            elif lattice[i][j] != 0:
                                 total_slow += 1
                                 if j >= boundary_lane:
                                     slow_down += 1
@@ -696,14 +693,13 @@ if __name__ == '__main__':
                 slow_sites[t] += right_slow
 
         plot_current(current, post = True)
-        plt.savefig(f"./Post_Current_{runs}_{Lx}x{Ly}.png", format="png", dpi=600) # only withOUT interactive python
+        plt.savefig(f"./Post_Current_{runs}_{Lx}x{Ly}.png", format="png", dpi=600)
         plot_empty_sites(empty_sites, post = True)
         plt.savefig(f"./Post_Empty_Sites_Chosen_{runs}_{Lx}x{Ly}.png", format="png", dpi=600)
         plot_type_particles(fast_chosen, slow_chosen, post = True)
         plt.savefig(f"./Post_Type_Particle_Chosen_{runs}_{Lx}x{Ly}.png", format="png", dpi=600)                    
         plot_particle_occupation(fast_sites, slow_sites, post = True)
         plt.savefig(f"./Post_Particle_Occupation{runs}_{Lx}x{Ly}.png", format="png", dpi=600)
-
         plot_YcurrentII(YcurrentII_fast, YcurrentII_slow)
         plt.savefig(f"./Post_Y_CurrentII_{runs}_{Lx}x{Ly}.png", format="png", dpi=600) 
         plot_YcurrentT(YcurrentT_fast, YcurrentT_slow)
